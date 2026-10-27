@@ -1,0 +1,9 @@
+{
+  "name": "DigiFan",
+  "short_name": "DigiFan",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#1d4a35",
+  "theme_color": "#1d4a35"
+}

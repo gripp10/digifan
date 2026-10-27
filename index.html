@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DigiFan</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="DigiFan">
+<meta name="theme-color" content="#1d4a35">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --pitch: #1d4a35;
+    --pitch-deep: #143526;
+    --chalk: #eef2ee;
+    --chalk-dim: #b9c9bd;
+    --card: #f2c500;
+    --card-ink: #1a1a10;
+    --alert: #ffb4a8;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--pitch);
+    color: var(--chalk);
+    font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+    padding: env(safe-area-inset-top) 24px env(safe-area-inset-bottom);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    max-width: 520px;
+    margin: 0 auto;
+  }
+  h1 {
+    font-family: "Barlow Condensed", "Arial Narrow", Impact, sans-serif;
+    font-weight: 700;
+    font-size: 72px;
+    line-height: 0.95;
+    letter-spacing: 0.01em;
+    margin: 0 0 16px;
+  }
+  p { font-size: 19px; line-height: 1.45; margin: 0 0 28px; color: var(--chalk-dim); max-width: 34ch; }
+  button {
+    width: 100%;
+    padding: 20px;
+    border: 0;
+    border-radius: 14px;
+    background: var(--card);
+    color: var(--card-ink);
+    font: 700 24px "Barlow Condensed", "Arial Narrow", sans-serif;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+  }
+  button:focus-visible { outline: 3px solid var(--chalk); outline-offset: 3px; }
+  button:disabled { opacity: 0.55; }
+  #status { margin: 20px 0 0; font-size: 17px; min-height: 1.5em; color: var(--chalk); }
+  #status.err { color: var(--alert); }
+  #install { display: none; border-left: 4px solid var(--card); padding: 4px 0 4px 16px; margin: 0 0 28px; font-size: 18px; line-height: 1.5; color: var(--chalk); }
+  #install b { color: var(--card); }
+</style>
+</head>
+<body>
+  <h1>DigiFan</h1>
+  <p>A lock-screen alert the moment your player checks in or out of the game.</p>
+
+  <div id="install">
+    First, add this page to your Home Screen: tap <b>Share</b>, then <b>Add to Home Screen</b>. Open DigiFan from the new icon to continue.
+  </div>
+
+  <button id="enable">Turn on alerts</button>
+  <div id="status" role="status"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script>
+  const SUPABASE_URL = 'https://bgsxvhvdkeendqmnqiti.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_FatqMMw1noQ1SZxa3J5n2w_u0sWGeCH';
+  const VAPID_PUBLIC_KEY = 'BDb-2SjcepQZk7aOG9fpCB7lySRNK7bcHGgZrwyyt7MjVMOoEpoldml0XC7xdMUX44vaatC-AhNsGqZIUHsVp5s';
+  const LABEL = 'test-game';   // must match the label in your Supabase table and config.json
+
+  const btn = document.getElementById('enable');
+  const statusEl = document.getElementById('status');
+  const installEl = document.getElementById('install');
+
+  function say(msg, isErr) {
+    statusEl.textContent = msg;
+    statusEl.className = isErr ? 'err' : '';
+  }
+
+  function urlBase64ToUint8Array(b64) {
+    const pad = '='.repeat((4 - (b64.length % 4)) % 4);
+    const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+    return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
+  }
+
+  const standalone = window.navigator.standalone === true ||
+    window.matchMedia('(display-mode: standalone)').matches;
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+
+  if (isIOS && !standalone) {
+    installEl.style.display = 'block';
+    btn.disabled = true;
+  }
+
+  async function enableAlerts() {
+    btn.disabled = true;
+    try {
+      if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+        say('This browser can’t receive push alerts. On iPhone, open DigiFan from the Home Screen icon.', true);
+        btn.disabled = false;
+        return;
+      }
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') {
+        say('Alerts are blocked. Allow notifications for DigiFan in Settings, then try again.', true);
+        btn.disabled = false;
+        return;
+      }
+      const reg = await navigator.serviceWorker.register('sw.js');
+      await navigator.serviceWorker.ready;
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) {
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+        });
+      }
+      const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+      const json = sub.toJSON();
+      const { error } = await db.from('push_subscriptions').upsert(
+        { label: LABEL, endpoint: json.endpoint, subscription: json },
+        { onConflict: 'endpoint' }
+      );
+      if (error) throw error;
+      say('Alerts are on. You can close this app.');
+      btn.textContent = 'Alerts are on';
+    } catch (e) {
+      say('Something went wrong: ' + (e.message || e), true);
+      btn.disabled = false;
+    }
+  }
+
+  btn.addEventListener('click', enableAlerts);
+</script>
+</body>
+</html>
